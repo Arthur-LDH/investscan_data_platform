@@ -15,7 +15,7 @@ BUCKET_NAME = "iris-data"
 
 # Configuration API
 BASE_URL = "https://public.opendatasoft.com/api/explore/v2.1/catalog/datasets/georef-france-iris/records"
-REGIONS = ["Bretagne"]  # Vous pouvez ajouter d'autres régions si nécessaire
+REGIONS = ["Bretagne"]
 LIMIT = 100
 
 
