@@ -1,8 +1,8 @@
 from pyspark.sql import functions as F
-from pyspark.sql.types import DoubleType, IntegerType, DateType
+from pyspark.sql.types import DoubleType, IntegerType
 
 from etl.common.spark import SparkManager
-from etl.jobs.base_job import BaseETLJob
+from etl.common.base_process_job import BaseETLJob
 
 
 class DVFProcessor(BaseETLJob):
