@@ -1,5 +1,7 @@
 from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType, IntegerType, DateType
+
+from etl.common.spark import SparkManager
 from etl.jobs.base_job import BaseETLJob
 
 
@@ -11,10 +13,22 @@ class DVFProcessor(BaseETLJob):
 
     def extract(self):
         """Extrait les données DVF depuis MinIO"""
+        print("Début de l'extraction")
         self.metrics["extraction_start"] = F.current_timestamp()
 
-        # Lire les données brutes
-        raw_df = self.minio.read("raw", "dvf/dvf_latest.csv")
+        print("Tentative de lecture du fichier")
+        try:
+            raw_df = self.minio.read("dvf-data", "dvf_22_2019.csv")
+        except Exception as e:
+            print(f"Erreur lors de la lecture du fichier: {str(e)}")
+            raise e
+
+        print(f"DataFrame lu - nombre de lignes : {raw_df.count()}")
+        print(f"Colonnes du DataFrame : {raw_df.columns}")
+
+        if raw_df.count() == 0:
+            print("ATTENTION : Le DataFrame est vide !")
+            raise ValueError("Le fichier CSV est vide ou n'a pas été trouvé.")
 
         self.metrics["row_count_raw"] = raw_df.count()
         self.metrics["extraction_end"] = F.current_timestamp()
@@ -24,6 +38,7 @@ class DVFProcessor(BaseETLJob):
     def transform(self, data_frame):
         """Transforme les données DVF"""
         self.metrics["transformation_start"] = F.current_timestamp()
+        print("Début de la transformation")
 
         # Étape 1: Conversion des types de base
         typed_df = (data_frame
@@ -36,9 +51,13 @@ class DVFProcessor(BaseETLJob):
                     .withColumn("nombre_pieces_principales", F.col("nombre_pieces_principales").cast(IntegerType()))
                     )
 
+        print("Types de données convertis")
+
         # Étape 2: Séparer les bâtiments des terrains
         batiments_df = typed_df.filter(F.col("type_local").isNotNull())
         terrains_df = typed_df.filter(F.col("type_local").isNull())
+
+        print(f"Nombre de bâtiments : {batiments_df.count()}")
 
         # Étape 3: Traitement des bâtiments
         batiments_clean = (batiments_df
@@ -56,6 +75,8 @@ class DVFProcessor(BaseETLJob):
                            .filter(F.col("prix_m2").between(100, 20000))
                            )
 
+        print(f"Nombre de bâtiments après nettoyage : {batiments_clean.count()}")
+
         # Étape 4: Traitement des terrains
         terrains_clean = (terrains_df
                           # Nettoyer les valeurs nulles essentielles
@@ -72,6 +93,8 @@ class DVFProcessor(BaseETLJob):
                           .filter(F.col("prix_m2_terrain").between(0.5, 1000))
                           )
 
+        print(f"Nombre de terrains après nettoyage : {terrains_clean.count()}")
+
         # Étape 5: Agrégations pour résoudre le problème des lignes multiples par mutation
 
         # Pour les bâtiments, regrouper par id_mutation et prendre la somme des surfaces
@@ -86,6 +109,8 @@ class DVFProcessor(BaseETLJob):
         )
                          .withColumn("prix_m2_recalcule", F.col("valeur_fonciere") / F.col("surface_totale_bati"))
                          )
+
+        print(f"Nombre de bâtiments agrégés : {batiments_agg.count()}")
 
         # Pour les terrains, regrouper par id_mutation
         terrains_agg = (terrains_clean
@@ -102,12 +127,16 @@ class DVFProcessor(BaseETLJob):
                         .withColumn("type_bien", F.lit("terrain"))
                         )
 
+        print(f"Nombre de terrains agrégés : {terrains_agg.count()}")
+
         # Étape 6: Traitement final des colonnes
         batiments_final = (batiments_agg
                            .withColumn("surface_terrain", F.col("surface_terrain_bati"))
                            .withColumn("prix_m2", F.col("prix_m2_recalcule"))
                            .drop("surface_terrain_bati", "prix_m2_recalcule")
                            )
+
+        print(f"Nombre de bâtiments finaux : {batiments_final.count()}")
 
         terrains_final = (terrains_agg
                           .withColumn("surface_reelle_bati", F.lit(None).cast(DoubleType()))
@@ -116,11 +145,15 @@ class DVFProcessor(BaseETLJob):
                           .drop("prix_m2_terrain_recalcule", "type_bien")
                           )
 
+        print(f"Nombre de terrains finaux : {terrains_final.count()}")
+
         # Étape 7: Union des bâtiments et terrains traités
         cleaned_df = batiments_final.unionByName(
             terrains_final.select(batiments_final.columns),
             allowMissingColumns=True
         )
+
+        print(f"Nombre total de lignes après transformation : {cleaned_df.count()}")
 
         # Calculer métriques
         self.metrics["row_count_transformed"] = cleaned_df.count()
@@ -165,9 +198,16 @@ class DVFProcessor(BaseETLJob):
 
 
 if __name__ == "__main__":
+    spark_manager = SparkManager.get_instance()
+    processor = None
     try:
         processor = DVFProcessor()
         result = processor.execute()
         print(f"Traitement terminé avec succès: {result}")
     except Exception as e:
         print(f"Erreur lors du traitement: {str(e)}")
+    finally:
+        if spark_manager:
+            spark_manager.stop()
+        if processor:
+            processor.close()  # À ajouter dans votre BaseETLJob si nécessaire
