@@ -18,7 +18,7 @@ class SparkManager:
         self.spark = (SparkSession.builder
                       .appName(app_name)
                       .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.1")
-                      .config("spark.hadoop.fs.s3a.endpoint", "http://127.0.0.1:9000")
+                      .config("spark.hadoop.fs.s3a.endpoint", "http://localhost:9000")
                       .config("spark.hadoop.fs.s3a.access.key", "minioadmin")
                       .config("spark.hadoop.fs.s3a.secret.key", "minioadmin")
                       .config("spark.hadoop.fs.s3a.path.style.access", "true")
