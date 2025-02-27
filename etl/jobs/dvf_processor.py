@@ -5,6 +5,7 @@ import logging
 import json
 import os
 import io
+import datetime
 
 
 class DVFConsolidator(BaseETLJob):
@@ -12,19 +13,27 @@ class DVFConsolidator(BaseETLJob):
     Job ETL pour la consolidation des données DVF
     - Lit les fichiers DVF collectés depuis le dossier le plus récent dans raw-data/dvf-data/
     - Nettoie et standardise les données
-    - Consolide en un unique fichier parquet
+    - Consolide en un unique fichier parquet avec gestion de versions
     """
 
     def __init__(self,
                  input_bucket="raw-data",
                  input_prefix="dvf-data",
                  output_bucket="processed",
-                 output_path="dvf_consolidated.parquet"):  # Modifié pour indiquer un fichier .parquet
+                 output_base_path="dvf_consolidated",
+                 version=None):  # Version optionnelle
         super().__init__("DVFConsolidator")
         self.input_bucket = input_bucket
         self.input_prefix = input_prefix
         self.output_bucket = output_bucket
-        self.output_path = output_path
+
+        # Gestion du versionnement
+        current_date = datetime.datetime.now().strftime("%Y%m%d")
+        if version is None:
+            version = f"v_{current_date}"
+        self.version = version
+        self.output_base_path = output_base_path
+        self.output_path = f"{output_base_path}/{self.version}/data.parquet"
 
         # Configuration du logger
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -262,26 +271,18 @@ class DVFConsolidator(BaseETLJob):
             raise ValueError(f"Échec de la transformation des données DVF: {str(e)}")
 
     def load(self, data_frame):
-        """Sauvegarde les données consolidées en un fichier parquet unique"""
+        """Sauvegarde les données consolidées en un fichier parquet unique avec versionnement"""
         self.metrics["loading_start"] = F.current_timestamp()
-        self.logger.info(f"Début du chargement des données vers {self.output_bucket}/{self.output_path}")
+        self.logger.info(
+            f"Début du chargement des données vers {self.output_bucket}/{self.output_path} (version: {self.version})")
 
         try:
             # Assurer que le bucket de sortie existe
             self.minio.ensure_bucket_exists(self.output_bucket)
             self.logger.info(f"Le bucket {self.output_bucket} est prêt pour le chargement des données")
 
-            # Coalesce pour créer un seul fichier parquet
-            # La valeur optimale dépend de la taille de vos données. Une valeur trop
-            # basse pourrait causer des problèmes de mémoire.
-            coalesce_num = 1  # Pour un seul fichier
-
-            # Si votre dataset est très volumineux (>1GB), vous pourriez avoir besoin d'ajuster
-            # self.logger.info(f"Coalescence du DataFrame en {coalesce_num} partition(s)")
-            # df_single = data_frame.coalesce(coalesce_num)
-
             # Écrire directement en un seul fichier parquet
-            self.logger.info(f"Écriture d'un fichier parquet unique: {self.output_path}")
+            self.logger.info(f"Écriture d'un fichier parquet unique pour la version {self.version}")
 
             # Utiliser coalesce(1) pour forcer un seul fichier de sortie
             self.minio.write(
@@ -299,6 +300,7 @@ class DVFConsolidator(BaseETLJob):
             try:
                 self.logger.info("Création du fichier de métadonnées")
                 metadata = {
+                    "version": self.version,
                     "processed_at": str(self.metrics.get("loading_start", "unknown")),
                     "source_folder": self.metrics.get("collection_date", "unknown"),
                     "total_files_processed": self.metrics.get("files_count", 0),
@@ -307,12 +309,12 @@ class DVFConsolidator(BaseETLJob):
                     "departments": [row.code_departement for row in
                                     data_frame.select("code_departement").distinct().collect()],
                     "years": [row.annee_mutation for row in data_frame.select("annee_mutation").distinct().collect()],
-                    "file_path": self.output_path  # Ajout du chemin du fichier parquet
+                    "file_path": self.output_path
                 }
 
                 # Convertir en JSON et sauvegarder directement via MinIO client
                 metadata_json = json.dumps(metadata, indent=2)
-                metadata_path = f"{os.path.splitext(self.output_path)[0]}_metadata.json"
+                metadata_path = f"{self.output_base_path}/{self.version}/metadata.json"
 
                 self.minio.minio_client.put_object(
                     bucket_name=self.output_bucket,
@@ -323,6 +325,64 @@ class DVFConsolidator(BaseETLJob):
                 )
 
                 self.logger.info(f"Métadonnées sauvegardées dans {self.output_bucket}/{metadata_path}")
+
+                # Créer un fichier catalog.json dans le dossier base pour répertorier toutes les versions
+                try:
+                    self.logger.info("Mise à jour du catalogue des versions")
+
+                    # Structure du catalogue
+                    version_entry = {
+                        "version": self.version,
+                        "created_at": str(self.metrics.get("loading_start", "unknown")),
+                        "source_folder": self.metrics.get("collection_date", "unknown"),
+                        "total_rows": self.metrics.get("rows_transformed", 0)
+                    }
+
+                    # Essayer de lire le catalogue existant
+                    catalog_path = f"{self.output_base_path}/catalog.json"
+                    catalog = {"versions": []}
+
+                    try:
+                        existing_catalog = self.minio.minio_client.get_object(
+                            bucket_name=self.output_bucket,
+                            object_name=catalog_path
+                        )
+                        catalog = json.loads(existing_catalog.read().decode('utf-8'))
+                    except Exception as e:
+                        self.logger.info(f"Aucun catalogue existant trouvé, création d'un nouveau: {str(e)}")
+
+                    # Ajouter la nouvelle version
+                    catalog["versions"].append(version_entry)
+                    # Trier par date de création décroissante
+                    catalog["versions"] = sorted(catalog["versions"],
+                                                 key=lambda x: x.get("created_at", ""),
+                                                 reverse=True)
+
+                    # Enregistrer le catalogue mis à jour
+                    catalog_json = json.dumps(catalog, indent=2)
+                    self.minio.minio_client.put_object(
+                        bucket_name=self.output_bucket,
+                        object_name=catalog_path,
+                        data=io.BytesIO(catalog_json.encode()),
+                        length=len(catalog_json),
+                        content_type="application/json"
+                    )
+
+                    # Créer un lien symbolique "latest" vers la version la plus récente
+                    latest_path = f"{self.output_base_path}/latest"
+                    latest_json = json.dumps({"redirect_to": self.version}, indent=2)
+                    self.minio.minio_client.put_object(
+                        bucket_name=self.output_bucket,
+                        object_name=f"{latest_path}/info.json",
+                        data=io.BytesIO(latest_json.encode()),
+                        length=len(latest_json),
+                        content_type="application/json"
+                    )
+
+                    self.logger.info(f"Catalogue mis à jour dans {self.output_bucket}/{catalog_path}")
+
+                except Exception as e:
+                    self.logger.warning(f"Erreur lors de la mise à jour du catalogue: {str(e)}")
 
             except Exception as e:
                 self.logger.warning(f"Erreur lors de la sauvegarde des métadonnées: {str(e)}")
@@ -335,12 +395,28 @@ class DVFConsolidator(BaseETLJob):
             raise ValueError(f"Échec du chargement des données DVF: {str(e)}")
 
         self.metrics["loading_end"] = F.current_timestamp()
-        self.logger.info("Chargement terminé avec succès")
+        self.logger.info(f"Chargement terminé avec succès pour la version {self.version}")
+
+    def get_latest_version_path(self):
+        """Retourne le chemin complet vers la version la plus récente"""
+        return f"{self.output_bucket}/{self.output_base_path}/{self.version}/data.parquet"
 
 
 if __name__ == "__main__":
     import sys
+    import argparse
     from etl.common.spark import SparkManager
+
+    # Configurer les arguments en ligne de commande
+    parser = argparse.ArgumentParser(description='Consolider les données DVF en un fichier parquet unique versionné')
+    parser.add_argument('--input-bucket', type=str, default='raw-data', help='Bucket contenant les données brutes')
+    parser.add_argument('--input-prefix', type=str, default='dvf-data', help='Préfixe des données DVF')
+    parser.add_argument('--output-bucket', type=str, default='processed', help='Bucket de destination')
+    parser.add_argument('--output-base-path', type=str, default='dvf_consolidated',
+                        help='Dossier de base pour les données versionnées')
+    parser.add_argument('--version', type=str, help='Version des données (par défaut: v_YYYYMMDD)')
+
+    args = parser.parse_args()
 
     # Configurer le logging
     logging.basicConfig(
@@ -350,7 +426,9 @@ if __name__ == "__main__":
     )
 
     logger = logging.getLogger("DVFConsolidator-Main")
-    logger.info("Démarrage du processus de consolidation DVF")
+    logger.info("Démarrage du processus de consolidation DVF avec versionnement")
+    logger.info(
+        f"Arguments: input={args.input_bucket}/{args.input_prefix}, output={args.output_bucket}/{args.output_base_path}, version={args.version}")
 
     spark_manager = None
     consolidator = None
@@ -363,15 +441,17 @@ if __name__ == "__main__":
         # Créer et exécuter le consolidateur
         logger.info("Création du consolidateur")
         consolidator = DVFConsolidator(
-            input_bucket="raw-data",
-            input_prefix="dvf-data",  # Sans trailing slash
-            output_bucket="processed",
-            output_path="dvf_consolidated.parquet"  # Modifié pour spécifier un fichier parquet unique
+            input_bucket=args.input_bucket,
+            input_prefix=args.input_prefix,
+            output_bucket=args.output_bucket,
+            output_base_path=args.output_base_path,
+            version=args.version
         )
 
-        logger.info("Exécution du job de consolidation")
+        logger.info(f"Exécution du job de consolidation (version: {consolidator.version})")
         result = consolidator.execute()
         logger.info(f"Consolidation terminée avec succès: {result}")
+        logger.info(f"Données disponibles dans: {consolidator.get_latest_version_path()}")
 
     except Exception as e:
         logger.error(f"Erreur lors de la consolidation: {str(e)}", exc_info=True)
