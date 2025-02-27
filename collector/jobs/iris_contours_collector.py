@@ -29,7 +29,7 @@ class IrisContoursCollectorJob(BaseCollectorJob):
         """
         super().__init__(
             app_name="IRIS Contours Collector",
-            bucket_name="iris-contours",
+            bucket_name="raw-data",
             **kwargs
         )
 
@@ -191,7 +191,7 @@ class IrisContoursCollectorJob(BaseCollectorJob):
 
         # Format de date pour le dossier
         folder_date = self.execution_date.strftime("%Y%m%d")
-        folder_path = f"{folder_date}/"
+        folder_path = f"iris-contours/{folder_date}/"
 
         saved_files = []
 

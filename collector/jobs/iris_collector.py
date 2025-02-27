@@ -29,7 +29,7 @@ class IRISCollectorJob(BaseCollectorJob):
         """
         super().__init__(
             app_name="IRIS Data Collector",
-            bucket_name="iris-data",
+            bucket_name="raw-data",
             **kwargs
         )
 
@@ -137,7 +137,7 @@ class IRISCollectorJob(BaseCollectorJob):
 
         # Format de date pour le dossier
         folder_date = self.execution_date.strftime("%Y%m%d")
-        folder_path = f"{folder_date}/"
+        folder_path = f"iris-data/{folder_date}/"
 
         saved_files = []
 
