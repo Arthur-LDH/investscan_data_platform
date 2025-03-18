@@ -7,4 +7,4 @@ minio~=7.2.15
 matplotlib~=3.10.0
 seaborn~=0.13.2
 geopandas~=1.0.1
-numpy~=2.2.3
+numpy==1.26.2

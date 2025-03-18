@@ -6,7 +6,7 @@ import tempfile
 import os
 import shutil
 import subprocess
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 from collector.common.base_collector_job import BaseCollectorJob
 
@@ -93,7 +93,12 @@ class BaseTDFiloIRISCollector(BaseCollectorJob):
             source_format = None
 
             for file_path in all_files:
-                if file_path.lower().endswith('.csv'):
+                # Extraction du nom de fichier à partir du chemin complet
+                filename = os.path.basename(file_path).lower()
+
+                # Vérifier que le fichier est un CSV, commence par "base_td_filo_iris" et ne commence pas par "meta_"
+                if (filename.endswith('.csv') and
+                        not filename.startswith('meta_')):
                     source_file = file_path
                     source_format = 'csv'
                     break
@@ -127,9 +132,10 @@ class BaseTDFiloIRISCollector(BaseCollectorJob):
         Returns :
             Données traitées
         """
-        self.logger.info("Traitement des données de contours IRIS")
+        self.logger.info("Traitement des données IRIS")
 
         source_file = collected_data.get('source_file')
+        self.logger.info(f"Traitement du fichier {source_file}")
         source_format = collected_data.get('source_format')
 
         try:

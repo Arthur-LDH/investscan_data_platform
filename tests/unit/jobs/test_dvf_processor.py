@@ -1,12 +1,8 @@
 import pytest
 from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, DateType
-import pandas as pd
-from datetime import date
 
-from etl.jobs.dvf_processor import DVFProcessor
-from etl.common.storage import MinIOConnector, PostgresConnector
+from etl.jobs.processor.dvf_processor import DVFProcessor
 
 
 # Fixtures pour les tests
