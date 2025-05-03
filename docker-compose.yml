@@ -258,22 +258,18 @@ services:
     environment:
       - NIFI_WEB_HTTP_PORT=8080
       - NIFI_WEB_HTTP_HOST=0.0.0.0
-      - NIFI_JVM_HEAP_INIT=1g
-      - NIFI_JVM_HEAP_MAX=2g
       - SINGLE_USER_CREDENTIALS_USERNAME=admin
       - SINGLE_USER_CREDENTIALS_PASSWORD=adminpassword
     volumes:
-      - nifi_data:/opt/nifi/nifi-current/data
+      - nifi_database_repository:/opt/nifi/nifi-current/database_repository
+      - nifi_flowfile_repository:/opt/nifi/nifi-current/flowfile_repository
+      - nifi_content_repository:/opt/nifi/nifi-current/content_repository
+      - nifi_provenance_repository:/opt/nifi/nifi-current/provenance_repository
+      - nifi_state:/opt/nifi/nifi-current/state
       - ./data:/data
       - ./nifi/scripts:/opt/nifi/nifi-current/scripts
       - ./nifi/templates:/opt/nifi/nifi-current/templates
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/nifi/"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s  # NiFi peut prendre du temps à démarrer
     depends_on:
       - kafka
       - postgres
@@ -384,6 +380,10 @@ services:
 volumes:
   postgres-db-volume:
   minio_storage:
-  nifi_data:
+  nifi_database_repository:
+  nifi_flowfile_repository:
+  nifi_content_repository:
+  nifi_provenance_repository:
+  nifi_state:
   grafana_data:
   prometheus_data:
